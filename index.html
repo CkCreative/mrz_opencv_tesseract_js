@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <script async src="/opencv.js" onload="onOpenCvReady();" type="text/javascript"></script>
+</head>
+
+<body>
+    <input type="file" id="inputImage" onchange="loadImage()" style="display:none">
+    <canvas id="imageCanvas" style="display:none"></canvas>
+    <canvas id="canvasOutput"></canvas>
+    <canvas id="roiCanvas"></canvas>
+    <button onclick="run()">Run</button>
+
+    <script async src="/tesseract.js" type="text/javascript"></script>
+    <script type="text/javascript">
+        function onOpenCvReady() {
+            document.getElementById('inputImage').style.display = 'block';
+        }
+
+        function loadImage() {
+            let inputImage = document.getElementById('inputImage');
+            let imageCanvas = document.getElementById('imageCanvas');
+            let ctx = imageCanvas.getContext('2d');
+            let img = new Image();
+            img.src = URL.createObjectURL(inputImage.files[0]);
+            img.onload = function () {
+                imageCanvas.width = img.width;
+                imageCanvas.height = img.height;
+                ctx.drawImage(img, 0, 0, img.width, img.height);
+            };
+        }
+
+        // Function to perform OCR on the canvas content
+        function performOCR() {
+            // Get the canvas element and its context
+            const imageCanvas = document.getElementById('roiCanvas');
+            const ctx = imageCanvas.getContext('2d');
+
+            // Capture the canvas content as an image
+            const imageData = ctx.getImageData(0, 0, imageCanvas.width, imageCanvas.height);
+            const imgDataUrl = imageCanvas.toDataURL('image/jpeg');
+
+            Tesseract.recognize(
+                imgDataUrl,
+                'eng',
+                {
+                    logger: m => console.log(m),
+                }
+            ).then(({ data: { text } }) => {
+                console.log(text);
+            })
+        }
+
+
+        function run() {
+            // Load the image
+            let image = cv.imread('imageCanvas'); // imageCanvas is the id of a canvas element
+
+            // Resize the image
+            let height = 600;
+            let ratio = image.rows / height;
+            let width = image.cols / ratio;
+            let dsize = new cv.Size(width, height);
+            cv.resize(image, image, dsize, 0, 0, cv.INTER_AREA);
+
+            // Convert the image to grayscale
+            let gray = new cv.Mat();
+            cv.cvtColor(image, gray, cv.COLOR_RGBA2GRAY);
+
+            // Apply Gaussian blur to the grayscale image
+            let ksize = new cv.Size(3, 3);
+            cv.GaussianBlur(gray, gray, ksize, 0);
+
+            // Calculate the kernel width as a fraction of the image width
+            const kernelWidthFraction = 0.1; // Adjust this value as needed
+            let kernelWidth = Math.floor(gray.cols * kernelWidthFraction);
+
+            // Ensure the kernel width is odd to maintain the center pixel
+            if (kernelWidth % 2 === 0) {
+                kernelWidth++;
+            }
+
+            // Create a rectangular kernel with the calculated width
+            let rectKernel = cv.Mat.ones(1, kernelWidth, cv.CV_8U);
+
+            // Apply the blackhat operation with the dynamic kernel
+            let blackhat = new cv.Mat();
+            cv.morphologyEx(gray, blackhat, cv.MORPH_BLACKHAT, rectKernel);
+
+
+            // Compute Scharr gradient
+            let gradX = new cv.Mat();
+            cv.Sobel(blackhat, gradX, cv.CV_32F, 1, 0);
+
+            // Scale the result to range [0, 255]
+            gradX.convertTo(gradX, cv.CV_8U);
+
+            // Apply closing operation
+            let closeKernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(21, 21));
+            cv.morphologyEx(gradX, gradX, cv.MORPH_CLOSE, closeKernel);
+
+            // Apply Otsu's thresholding method
+            cv.threshold(gradX, gradX, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
+
+            // Perform erosions to break apart connected components
+            cv.erode(gradX, gradX, new cv.Mat(), new cv.Point(-1, -1), 4);
+
+            // Set 5% of the left and right borders to zero
+            //let p = parseInt(image.cols * 0.05);
+            //gradX.colRange(new cv.Range(0, p)).setTo(new cv.Scalar(0));
+            //gradX.colRange(new cv.Range(image.cols - p, image.cols)).setTo(new cv.Scalar(0));
+
+            // Find contours in the thresholded image
+            let contours = new cv.MatVector();
+            let hierarchy = new cv.Mat();
+            cv.findContours(gradX, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+            // Create an array of objects where each object contains a contour and its area
+            let areas = [];
+            for (let i = 0; i < contours.size(); ++i) {
+                let contour = contours.get(i);
+                let area = cv.contourArea(contour, false);
+                areas.push({ contour: contour, area: area });
+            }
+
+            // Sort the array in descending order of area
+            areas.sort((a, b) => b.area - a.area);
+
+            // Loop over the contours
+            for (let i = 0; i < contours.size(); ++i) {
+                let c = contours.get(i);
+                let rect = cv.boundingRect(c);
+                let ar = rect.width / rect.height;
+                let crWidth = rect.width / gray.cols;
+
+                // Check if the aspect ratio and coverage width are within acceptable criteria
+                if (ar > 5 && crWidth > 0.75) {
+                    // Pad the bounding box since we applied erosions and now need to re-grow it
+                    let pX = parseInt((rect.x + rect.width) * 0.03);
+                    let pY = parseInt((rect.y + rect.height) * 0.03);
+                    rect.x -= pX;
+                    rect.y -= pY;
+                    rect.width += pX * 2;
+                    rect.height += pY * 2;
+
+                    // Extract the ROI from the image and draw a bounding box surrounding the MRZ
+                    let roi = image.roi(rect);
+                    // Apply additional preprocessing to the ROI before displaying it
+                    // For example, you can apply thresholding or other enhancements here
+                    // For this example, we'll apply binary thresholding to the ROI
+                    // Assuming 'src' is your source image
+                    let grayROI = new cv.Mat();
+                    cv.cvtColor(roi, grayROI, cv.COLOR_RGBA2GRAY, 0);
+
+                    try {
+                        // Apply binary thresholding to the ROI
+                        cv.GaussianBlur(grayROI, grayROI, ksize, 0);
+                        cv.threshold(grayROI, grayROI, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
+                    } catch (error) {
+                        console.error('Error in thresholding:', error);
+                    }
+
+                    let point1 = new cv.Point(rect.x, rect.y);
+                    let point2 = new cv.Point(rect.x + rect.width, rect.y + rect.height);
+                    cv.rectangle(image, point1, point2, [0, 255, 0, 255], 2, cv.LINE_AA);
+
+
+
+
+                    // Show the output images
+                    // You need to create two canvas elements with ids 'canvasOutput' and 'roiCanvas'
+                    cv.imshow('canvasOutput', image);
+                    cv.imshow('roiCanvas', grayROI);
+                    performOCR()
+
+                    break;
+                }
+            }
+
+        }
+    </script>
+</body>
+
+</html>
