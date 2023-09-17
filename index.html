@@ -2,15 +2,26 @@
 <html>
 
 <head>
+    <link rel="stylesheet" href="/style.css">
     <script async src="/opencv.js" onload="onOpenCvReady();" type="text/javascript"></script>
 </head>
 
 <body>
     <input type="file" id="inputImage" onchange="loadImage()" style="display:none">
-    <canvas id="imageCanvas" style="display:none"></canvas>
-    <canvas id="canvasOutput"></canvas>
-    <canvas id="roiCanvas"></canvas>
     <button onclick="run()">Run</button>
+    <canvas id="imageCanvas" style="display:none"></canvas>
+    <div class="container">
+        <div class="col">
+            <canvas id="canvasOutput"></canvas>
+        </div>
+        <div class="col">
+            <canvas id="roiCanvas"></canvas>
+            <div id="outputText"></div>
+        </div>
+
+
+    </div>
+
 
     <script async src="/tesseract.js" type="text/javascript"></script>
     <script type="text/javascript">
@@ -48,6 +59,7 @@
                     logger: m => console.log(m),
                 }
             ).then(({ data: { text } }) => {
+                document.getElementById("outputText").innerText = text
                 console.log(text);
             })
         }
@@ -178,6 +190,24 @@
                 }
             }
 
+
+        }
+        function scaleImageWithAspectRatio(inputImage, scaleFactor) {
+            // Calculate the new width and height while maintaining the aspect ratio
+            const newWidth = Math.floor(inputImage.cols * scaleFactor);
+            const newHeight = Math.floor(inputImage.rows * scaleFactor);
+
+            // Create a Size object with the new dimensions
+            const newSize = new cv.Size(newWidth, newHeight);
+
+            // Create an empty Mat to store the scaled-up image
+            const scaledImage = new cv.Mat();
+
+            // Resize the image to the new dimensions
+            cv.resize(inputImage, scaledImage, newSize, 0, 0, cv.INTER_LINEAR); // You can choose a different interpolation method if needed
+
+            // Return the scaled-up image
+            return scaledImage;
         }
     </script>
 </body>

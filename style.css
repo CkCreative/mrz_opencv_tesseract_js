@@ -1,0 +1,17 @@
+.container {
+  display: flex;
+  justify-content: center;
+  overflow: hidden;
+  flex-wrap: wrap;
+}
+
+.col {
+  width: 48%;
+  margin: auto;
+}
+
+canvas {
+  object-fit: contain;
+  max-width: 100%;
+  border: 2px solid;
+}
